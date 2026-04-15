@@ -1,0 +1,124 @@
+# Conexión y Generación del Dataset (Bloque 1)
+
+import pandas as pd
+import numpy as np
+import requests
+import random
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+# 1. Pedir la API Key en una caja de texto estándar (sin ocultar)
+api_key = input("Introduce tu API Key de AEMET (o presiona Enter para usar modo simulación local): ")
+
+print("\nConectando con red de sensores atmosféricos...")
+
+# 2. Generamos un dataset simulado de 1000 registros para entrenar a la IA
+np.random.seed(42)
+datos = []
+
+for _ in range(1000):
+    estado = random.choice(["Aire Limpio", "Episodio de Calima", "Polución Urbana"])
+    
+    if estado == "Aire Limpio":
+        pm25 = np.random.normal(10, 5)
+        co2 = np.random.normal(400, 20)
+        humedad = np.random.normal(60, 10)
+        temp = np.random.normal(22, 3)
+    elif estado == "Episodio de Calima":
+        pm25 = np.random.normal(150, 40) # Partículas altas por el polvo
+        co2 = np.random.normal(410, 20)
+        humedad = np.random.normal(30, 10) # Humedad baja típica de calima
+        temp = np.random.normal(28, 4)
+    else: # Polución Urbana
+        pm25 = np.random.normal(80, 20)
+        co2 = np.random.normal(600, 50) # CO2 alto por tráfico
+        humedad = np.random.normal(65, 10)
+        temp = np.random.normal(24, 3)
+        
+    datos.append([pm25, co2, humedad, temp, estado])
+
+df = pd.DataFrame(datos, columns=['PM2.5', 'CO2', 'Humedad', 'Temperatura', 'Estado'])
+
+# 3. Inyectamos los "errores de sensor" que te piden limpiar en la actividad
+# - Valores de CO2 negativos
+df.loc[10:20, 'CO2'] = -50 
+# - Picos de PM2.5 con fallo de humedad (condensación)
+df.loc[50:60, 'PM2.5'] = 300 
+df.loc[50:60, 'Humedad'] = 99 
+# - Nulos
+df.loc[80:85, 'Temperatura'] = np.nan 
+
+print("¡Dataset inicial cargado con éxito! Total de registros:", len(df))
+df.head() # Muestra las primeras 5 filas
+
+
+# Curaduría y Limpieza de Datos (Bloque 1)
+
+print("Tamaño antes de limpiar:", len(df))
+
+# 1. Eliminar registros con CO2 negativo (Fallo de sensor)
+df_limpio = df[df['CO2'] >= 0]
+
+# 2. Eliminar falsos positivos de PM2.5 (Picos altos pero con humedad extrema > 95%)
+df_limpio = df_limpio[~((df_limpio['PM2.5'] > 200) & (df_limpio['Humedad'] > 95))]
+
+# 3. Eliminar valores nulos y duplicados
+df_limpio = df_limpio.dropna()
+df_limpio = df_limpio.drop_duplicates()
+
+print("Tamaño después de limpiar:", len(df_limpio))
+print("¡Datos listos para entrenar a la IA!")
+
+
+# Entrenamiento del Modelo y Matriz de Confusión (Bloque 2)
+
+from sklearn.model_selection import train_test_split
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics import classification_report, confusion_matrix
+
+# 1. Separar las características (sensores) de la etiqueta (Estado)
+X = df_limpio[['PM2.5', 'CO2', 'Humedad', 'Temperatura']]
+y = df_limpio['Estado']
+
+# 2. Dividir datos: 70% entrenamiento, 30% validación (examen)
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.3, random_state=42)
+
+# 3. Configurar y Entrenar el Modelo
+modelo_ia = RandomForestClassifier(n_estimators=100, random_state=42)
+modelo_ia.fit(X_train, y_train)
+
+# 4. Hacer que la IA haga el "examen" con los datos del 30%
+predicciones = modelo_ia.predict(X_test)
+
+# 5. Dibujar la Matriz de Confusión
+matriz = confusion_matrix(y_test, predicciones, labels=["Aire Limpio", "Episodio de Calima", "Polución Urbana"])
+
+plt.figure(figsize=(8,6))
+sns.heatmap(matriz, annot=True, fmt='d', cmap='Blues', 
+            xticklabels=["Aire Limpio", "Calima", "Polución Urbana"], 
+            yticklabels=["Aire Limpio", "Calima", "Polución Urbana"])
+plt.title('Matriz de Confusión - Air-Guard')
+plt.ylabel('Dato Real')
+plt.xlabel('Predicción de la IA')
+plt.show()
+
+print("\nReporte de Precisión de la IA:")
+print(classification_report(y_test, predicciones))
+
+
+# Test de Estrés - Registros Frontera (Bloque 3)
+
+# Creamos 5 nuevos registros extremos para engañar al modelo
+datos_estres = pd.DataFrame({
+    'PM2.5': [160, 45, 12, 180, 90],
+    'CO2':   [405, 590, 400, 650, 410],
+    'Humedad': [25, 60, 80, 20, 90],
+    'Temperatura': [30, 25, 18, 32, 15]
+})
+
+print("Evaluando registros frontera...\n")
+
+predicciones_estres = modelo_ia.predict(datos_estres)
+
+for i in range(5):
+    print(f"Registro {i+1} -> Sensores: PM2.5: {datos_estres.iloc[i]['PM2.5']}, CO2: {datos_estres.iloc[i]['CO2']} | Predicción IA: {predicciones_estres[i]}")
